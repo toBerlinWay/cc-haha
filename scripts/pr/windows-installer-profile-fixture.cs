@@ -1930,7 +1930,7 @@ namespace CcHahaInstallerProfile
       // Latch the primary safe failure before considering late diagnostics. A
       // malformed later record cannot erase it, authorize ACK or promote facts.
       state.report.Check("subject-postack-" + first.name, false, NativePlatform.SafeFailure(new FixtureFailure(first.detail)));
-      string[] late = { "subject-failure-type", "subject-failure-native", "subject-failure-stack", "subject-secondary-failure", "subject-failure-diagnostic-unavailable",
+      string[] late = { "subject-failure-exit", "subject-failure-command", "subject-failure-image", "subject-failure-exit-unavailable", "subject-legacy-tasklist", "subject-legacy-matches", "subject-failure-type", "subject-failure-native", "subject-failure-stack", "subject-secondary-failure", "subject-failure-diagnostic-unavailable",
         "subject-phase-cleanup", "subject-owned-child-stop", "subject-owned-child-close", "subject-terminal-report", "subject-terminal-message", "subject-channel-close", "f1-debug-cleanup-unknown" };
       foreach (CheckResult check in child.checks.Skip(1))
       {
@@ -2717,6 +2717,7 @@ namespace CcHahaInstallerProfile
         startedAtUtc = DateTime.UtcNow.ToString("o")
       };
       Exception firstFailure = null;
+      bool exitKnown = false;
       bool initial = spec.mode == FunctionalPolicy.SubjectMode && command.phase == "observer-calibration";
       try
       {
@@ -2746,7 +2747,7 @@ namespace CcHahaInstallerProfile
           report.releasedPeExecutionStatus = "resume_returned_success";
         }
         if (initial) diagnosticStage = "subject-legacy-wait";
-        evidence.exitCode = api.WaitChild(child, command.timeoutMilliseconds);
+        evidence.exitCode = api.WaitChild(child, command.timeoutMilliseconds); exitKnown = true;
         CorePolicy.Require(evidence.exitCode == command.expectedExitCode, "phase-exact-exit-" + command.phase);
         if (beforeEnd != null) beforeEnd(evidence);
         evidence.finishedAtUtc = DateTime.UtcNow.ToString("o");
@@ -2756,7 +2757,16 @@ namespace CcHahaInstallerProfile
         ReadAck("phase-end-ack", command.phase);
         return evidence;
       }
-      catch (Exception error) { firstFailure = error; if (spec.mode == FunctionalPolicy.SubjectMode) RememberFailure(report, diagnosticStage ?? "subject-products", error); throw; }
+      catch (Exception error)
+      {
+        firstFailure = error;
+        if (spec.mode == FunctionalPolicy.SubjectMode)
+        {
+          RememberFailure(report, diagnosticStage ?? "subject-products", error);
+          if (initial && exitKnown) RecordLegacyExit(report, child, evidence.exitCode, command.expectedExitCode, evidence);
+        }
+        throw;
+      }
       finally
       {
         if (initial) diagnosticStage = "subject-legacy-cleanup";
@@ -2789,6 +2799,121 @@ namespace CcHahaInstallerProfile
         && RegistryEvidence.OwnedProducts(spec.expectedSid).Count == 0, "empty-precreated-default-root");
     }
 
+    internal sealed class LegacyCsvFacts
+    {
+      internal string status = "unknown", sha256 = "not_read";
+      internal long bytes;
+      internal int rows, literalMask;
+      internal bool systemPid;
+      internal string Format(string label)
+      {
+        return "file=" + label + "; status=" + status + "; bytes=" + bytes.ToString(System.Globalization.CultureInfo.InvariantCulture)
+          + "; sha=" + sha256 + "; rows=" + rows.ToString(System.Globalization.CultureInfo.InvariantCulture)
+          + "; mask=" + literalMask.ToString("x2", System.Globalization.CultureInfo.InvariantCulture) + "; pid4=" + (systemPid ? "1" : "0");
+      }
+    }
+
+    internal static LegacyCsvFacts AnalyzeLegacyCsv(byte[] bytes)
+    {
+      LegacyCsvFacts result = new LegacyCsvFacts { bytes = bytes == null ? 0 : bytes.Length };
+      if (bytes == null) return result;
+      if (bytes.Length > 2097152) { result.status = "oversize"; return result; }
+      using (SHA256 hash = SHA256.Create()) result.sha256 = CorePolicy.Hex(hash.ComputeHash(bytes));
+      string text = Encoding.ASCII.GetString(bytes);
+      for (int i = 0; i < CorePolicy.LegacyNames.Length; i++)
+        if (text.IndexOf(CorePolicy.LegacyNames[i], StringComparison.OrdinalIgnoreCase) >= 0) result.literalMask |= 1 << i;
+      try
+      {
+        List<string[]> rows = ParseCsv(text); result.rows = rows.Count;
+        bool schema = true;
+        foreach (string[] row in rows)
+        {
+          int pid;
+          if (row.Length < 2 || !Int32.TryParse(row[1], out pid) || pid < 0) { schema = false; continue; }
+          if (pid == 4) result.systemPid = true;
+        }
+        result.status = schema ? "regular" : "malformed";
+      }
+      catch { result.status = "malformed"; }
+      return result;
+    }
+
+    internal static byte[] ReadLegacyBytes(Stream input)
+    {
+      using (MemoryStream output = new MemoryStream())
+      {
+        byte[] buffer = new byte[8192];
+        while (true)
+        {
+          int count = input.Read(buffer, 0, Math.Min(buffer.Length, 2097153 - checked((int)output.Length)));
+          if (count == 0) return output.ToArray();
+          output.Write(buffer, 0, count);
+          CorePolicy.Require(output.Length <= 2097152, "legacy-csv-read-exceeded-bound");
+        }
+      }
+    }
+
+    internal static LegacyCsvFacts ReadLegacyCsv(NativePlatform api, string root, string path)
+    {
+      LegacyCsvFacts result = new LegacyCsvFacts();
+      try
+      {
+        CorePolicy.Require(CorePolicy.SamePath(Path.GetDirectoryName(path), root), "legacy-csv-owned-parent");
+        FileAttributes attributes = File.GetAttributes(path);
+        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0) { result.status = "unsafe"; return result; }
+        FileIdentity directory = api.IdentifyPath(root, true);
+        using (FileStream input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+          FileIdentity before = api.LegacyCsvIdentity(input, path); result.bytes = before.bytes;
+          if (before.bytes > 2097152) { result.status = "oversize"; return result; }
+          CorePolicy.Require(!directory.reparse && !before.reparse && !before.directory
+            && CorePolicy.SamePath(before.canonicalPath, Path.Combine(directory.canonicalPath, Path.GetFileName(path))), "legacy-csv-owned-regular-file");
+          byte[] bytes = ReadLegacyBytes(input); result = AnalyzeLegacyCsv(bytes);
+          FileIdentity after = api.LegacyCsvIdentity(input, path);
+          if (after.reparse || after.directory || after.fileId != before.fileId || after.volumePath != before.volumePath
+            || !CorePolicy.SamePath(after.canonicalPath, before.canonicalPath) || before.bytes != bytes.Length || after.bytes != bytes.Length)
+            result.status = "unstable";
+        }
+        return result;
+      }
+      catch (FileNotFoundException) { result.status = "missing"; }
+      catch (DirectoryNotFoundException) { result.status = "missing"; }
+      catch { result.status = "unknown"; }
+      return result;
+    }
+
+    internal static string LegacyExitDetail(OwnedProcess child, int actual, int expected)
+    {
+      CorePolicy.Require(child != null && child.pid > 0 && child.assigned && child.resumed && child.exited
+        && FunctionalPolicy.DecimalTime(child.creationTime), "legacy-exit-held-natural-cap");
+      return "actual=" + actual.ToString(System.Globalization.CultureInfo.InvariantCulture) + "; hex=" + unchecked((uint)actual).ToString("x8", System.Globalization.CultureInfo.InvariantCulture)
+        + "; expected=" + expected.ToString(System.Globalization.CultureInfo.InvariantCulture) + "; pid=" + child.pid.ToString(System.Globalization.CultureInfo.InvariantCulture) + "; birth=" + child.creationTime;
+    }
+
+    internal static void RecordLegacyExit(FixtureReport report, OwnedProcess child, int actual, int expected, PhaseEvidence evidence)
+    {
+      try
+      {
+        report.Check("subject-failure-exit", false, LegacyExitDetail(child, actual, expected));
+        CorePolicy.Require(evidence != null && F1Policy.Hash(evidence.argvSha256) && F1Policy.Hash(evidence.environmentSha256), "legacy-exit-command-binding");
+        report.Check("subject-failure-command", false, "argvsha=" + evidence.argvSha256 + "; envsha=" + evidence.environmentSha256);
+        CorePolicy.Require(child.image != null && !child.image.reparse && F1Policy.Hash(child.image.sha256), "legacy-exit-image-binding");
+        report.Check("subject-failure-image", false, "imagesha=" + child.image.sha256);
+      }
+      catch { report.Check("subject-failure-exit-unavailable", false, "Held child exit diagnostic unavailable"); }
+    }
+
+    internal static string LegacyPreflightCommand(string windows, string csv, string matches)
+    {
+      string tools = Path.Combine(windows, "SysWOW64");
+      string cmd = Path.Combine(tools, "cmd.exe"), tasklist = Path.Combine(tools, "tasklist.exe"), findstr = Path.Combine(tools, "findstr.exe");
+      foreach (string path in new string[] { cmd, tasklist, findstr, csv, matches }) ShellPath(path);
+      StringBuilder predicates = new StringBuilder();
+      foreach (string name in CorePolicy.LegacyNames) predicates.Append(" /C:\"").Append(name).Append('"');
+      return "\"" + cmd + "\" /D /C \"\"" + tasklist + "\" /FO CSV /NH > \"" + csv
+        + "\" && \"" + findstr + "\" /I /L" + predicates + " \"" + csv + "\" > \"" + matches + "\"\"";
+    }
+
     private static void ShellPath(string path)
     {
       CorePolicy.ValidateAbsolutePath(path);
@@ -2799,19 +2924,13 @@ namespace CcHahaInstallerProfile
     {
       string tools = Path.Combine(normal["SystemRoot"], "SysWOW64");
       string cmd = Path.Combine(tools, "cmd.exe");
-      string tasklist = Path.Combine(tools, "tasklist.exe");
-      string findstr = Path.Combine(tools, "findstr.exe");
       string csv = Path.Combine(spec.fixtureRoot, phase + "-tasklist.csv");
       string matches = Path.Combine(spec.fixtureRoot, phase + "-matches.csv");
-      foreach (string path in new string[] { cmd, tasklist, findstr, csv, matches }) ShellPath(path);
+      string command = LegacyPreflightCommand(normal["SystemRoot"], csv, matches);
       CorePolicy.Require(!File.Exists(csv) && !File.Exists(matches), "fresh-legacy-preflight-output");
-      StringBuilder predicates = new StringBuilder();
-      foreach (string name in CorePolicy.LegacyNames) predicates.Append(" /C:\"").Append(name).Append('"');
-      // Same seven literal /C terms as the released fallback, over the entire
-      // real CSV row. No exact-image name set substitutes for this command.
-      string command = "\"" + cmd + "\" /D /C \"\"" + tasklist + "\" /FO CSV /NH > \"" + csv
-        + "\" && \"" + findstr + "\" /I /L" + predicates + " \"" + csv + "\" > \"" + matches + "\"\"";
       int expected = allowedHelper == null ? 1 : 0;
+      try
+      {
       Phase(Command(phase, cmd, command, expected, 30000), normal, delegate {
         if (spec.mode == FunctionalPolicy.SubjectMode && phase == "observer-calibration") diagnosticStage = "subject-legacy-output";
         CorePolicy.Require(File.Exists(csv) && File.Exists(matches), "tasklist-and-findstr-both-ran");
@@ -2829,6 +2948,17 @@ namespace CcHahaInstallerProfile
         }
         CorePolicy.Require(allowedHelper == null ? hits.Count == 0 : hits.Count == 1, "exact-owned-legacy-cohort");
       });
+      }
+      catch (Exception error)
+      {
+        if (spec.mode == FunctionalPolicy.SubjectMode && phase == "observer-calibration")
+        {
+          RememberFailure(report, diagnosticStage ?? "subject-legacy-command", error);
+          report.Check("subject-legacy-tasklist", false, ReadLegacyCsv(api, spec.fixtureRoot, csv).Format("tasklist"));
+          report.Check("subject-legacy-matches", false, ReadLegacyCsv(api, spec.fixtureRoot, matches).Format("matches"));
+        }
+        throw;
+      }
     }
 
     internal static List<string[]> ParseCsv(string text)

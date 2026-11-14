@@ -1110,8 +1110,84 @@ namespace CcHahaInstallerProfile
       });
     }
 
+    internal static void RunLegacyExitProbeTests(FixtureReport report)
+    {
+      Case(report, "legacy-shared-command-preserves-original-full-row-seven-literal-argv", delegate {
+        string windows = @"C:\Windows", csv = @"C:\Owned Space\observer-calibration-tasklist.csv", hits = @"C:\Owned Space\observer-calibration-matches.csv";
+        string tools = Path.Combine(windows, "SysWOW64"), predicates = "";
+        foreach (string name in CorePolicy.LegacyNames) predicates += " /C:\"" + name + "\"";
+        string original = "\"" + Path.Combine(tools,"cmd.exe") + "\" /D /C \"\"" + Path.Combine(tools,"tasklist.exe") + "\" /FO CSV /NH > \"" + csv
+          + "\" && \"" + Path.Combine(tools,"findstr.exe") + "\" /I /L" + predicates + " \"" + csv + "\" > \"" + hits + "\"\"";
+        string shared = Subject.LegacyPreflightCommand(windows,csv,hits);
+        Assert(shared == original && CorePolicy.LegacyNames.Length == 7 && !CorePolicy.LegacyNames.Contains("conhost.exe"), "original quoting/predicates/whole-row semantics unchanged; conhost is not a legacy literal");
+        Reject(delegate { Subject.LegacyPreflightCommand(windows,@"C:\Owned&Other\data.csv",hits); }, "shell metacharacter path remains refused");
+      });
+      Case(report, "legacy-csv-summary-is-bounded-value-free-and-keeps-all-seven-match-bits", delegate {
+        string text = "\"System\",\"4\",\"Services\",\"0\",\"100 K\"\r\n\"conhost.exe\",\"222\",\"Console\",\"2\",\"10 K\"\r\n";
+        Subject.LegacyCsvFacts clean = Subject.AnalyzeLegacyCsv(System.Text.Encoding.ASCII.GetBytes(text));
+        Assert(clean.status == "regular" && clean.rows == 2 && clean.systemPid && clean.literalMask == 0, "conhost counterexample must not invent a seven-literal match");
+        for(int i=0;i<CorePolicy.LegacyNames.Length;i++)
+        {
+          Subject.LegacyCsvFacts matched = Subject.AnalyzeLegacyCsv(System.Text.Encoding.ASCII.GetBytes(text+"\""+CorePolicy.LegacyNames[i]+"\",\"333\",\"Console\",\"2\",\"10 K\"\n"));
+          Assert(matched.literalMask == (1<<i) && matched.Format("tasklist").Length <= 192 && !matched.Format("tasklist").Contains(CorePolicy.LegacyNames[i]), "only bounded mask/count/hash leaves input for bit "+i);
+        }
+        Assert(Subject.AnalyzeLegacyCsv(System.Text.Encoding.ASCII.GetBytes("ERROR private-value")).status == "malformed", "non-CSV command errors never become a clean list");
+        Assert(Subject.AnalyzeLegacyCsv(new byte[2097153]).status == "oversize", "oversize output is not read as a valid empty list");
+        using (MemoryStream stream = new MemoryStream(new byte[2097162]))
+        { Reject(delegate { Subject.ReadLegacyBytes(stream); }, "growing or oversized input cannot bypass the actual read bound"); Assert(stream.Position == 2097153, "reader consumes at most limit plus one detecting byte"); }
+        using (MemoryStream stream = new MemoryStream(new byte[2097152])) Assert(Subject.ReadLegacyBytes(stream).Length == 2097152, "exact bound remains readable");
+        Assert(Subject.ReadLegacyCsv(null,@"C:\owned",@"C:\outside\other.csv").status == "unknown", "unknown or outside diagnostic access cannot throw or count as missing");
+      });
+      Case(report, "legacy-exit-signed-hex-cap-and-command-diagnostics-keep-primary-first", delegate {
+        foreach(int exit in new int[]{0,2,unchecked((int)0xc0000142u)})
+        {
+          FixtureReport child = new FixtureReport { mode=FunctionalPolicy.SubjectMode,binarySha256=new String('a',64),specSha256=new String('b',64) };
+          Subject.RememberFailure(child,"subject-legacy-wait",new FixtureFailure("phase-exact-exit-observer-calibration"));
+          OwnedProcess cap = new OwnedProcess {pid=50,creationTime="134391494714882963",assigned=true,resumed=true,exited=true,image=new FileIdentity {sha256=new String('c',64)}};
+          Subject.RecordLegacyExit(child,cap,exit,1,new PhaseEvidence {argvSha256=new String('d',64),environmentSha256=new String('e',64)});
+          Assert(child.checks[0].detail == "phase-exact-exit-observer-calibration" && child.checks.Any(row=>row.name=="subject-failure-exit" && row.detail.Contains("hex="+unchecked((uint)exit).ToString("x8"))), "exact code survives without replacing expected1 failure");
+          FixtureState state=new FixtureState {acknowledged=true,spec=new FixtureSpec {mode=FunctionalPolicy.ControllerMode,nonce="n",expectedBinarySha256=child.binarySha256,subjectSpecSha256=child.specSha256},subject=new OwnedProcess {pid=50},report=new FixtureReport()};
+          ProtocolTestChannel wire=new ProtocolTestChannel(); Subject.Finish(new FakePlatform(),new List<OwnedProcess>(),wire,child,"n",null);
+          Controller.PreservePostAckFailure(state,CoreJson.Deserialize<ProtocolMessage>(wire.Messages.Single()),50);
+          Assert(state.report.checks.Any(row=>row.name=="subject-postack-subject-failure-exit") && state.report.checks.All(row=>row.status=="failed"), "actual existing Frame consumer accepts bounded exit facts as failure only");
+        }
+      });
+      Case(report, "legacy-unknown-cap-or-diagnostic-failure-never-replaces-first-error", delegate {
+        FixtureReport child=new FixtureReport(); Subject.RememberFailure(child,"subject-legacy-wait",new FixtureFailure("phase-exact-exit-observer-calibration"));
+        Subject.RecordLegacyExit(child,new OwnedProcess {pid=50,assigned=true,resumed=true,exited=false,creationTime="134391494714882963"},0,1,null);
+        Assert(child.checks[0].detail=="phase-exact-exit-observer-calibration" && child.checks.Any(row=>row.name=="subject-failure-exit-unavailable")
+          && !child.checks.Any(row=>row.name=="subject-failure-exit"), "no default0 exit invented if natural termination is unknown");
+      });
+      Case(report, "legacy-fixed-abi-command-rejects-external-argv-and-non1-expectations", delegate {
+        string windows=@"C:\Windows",root=@"C:\Owned Space",hash=new String('a',64);
+        Func<CommandPlan> plan=()=>new CommandPlan {phase="abi-legacy-readonly",application=Path.Combine(windows,@"SysWOW64\cmd.exe"),commandLine=Subject.LegacyPreflightCommand(windows,Path.Combine(root,"observer-calibration-tasklist.csv"),Path.Combine(root,"observer-calibration-matches.csv")),expectedSha256=hash,expectedExitCode=1,timeoutMilliseconds=5000};
+        NativePlatform.RequireAbiLegacyCommand(plan(),windows,root,hash);
+        foreach(string fault in new[]{"app","argv","hash","phase","exit0","exit22","timeout"})
+        {
+          CommandPlan bad=plan();if(fault=="app")bad.application=@"C:\owned\other.exe";if(fault=="argv")bad.commandLine+=" & other";
+          if(fault=="hash")bad.expectedSha256=new String('b',64);if(fault=="phase")bad.phase="abi-owned-child";
+          if(fault=="exit0")bad.expectedExitCode=0;if(fault=="exit22")bad.expectedExitCode=22;if(fault=="timeout")bad.timeoutMilliseconds=30000;
+          Reject(()=>NativePlatform.RequireAbiLegacyCommand(bad,windows,root,hash),"fixed ABI rejects "+fault);
+        }
+      });
+      Case(report, "legacy-abi-calibration-keeps-hard-exit1-and-positive-tools-and-csv", delegate {
+        Subject.LegacyCsvFacts all=Subject.AnalyzeLegacyCsv(System.Text.Encoding.ASCII.GetBytes("\"System\",\"4\",\"Services\",\"0\",\"1 K\"\n"));
+        Subject.LegacyCsvFacts empty=Subject.AnalyzeLegacyCsv(new byte[0]);
+        Assert(NativePlatform.AbiLegacyQualified(true,1,all,empty,"positive_tasklist_and_findstr_observed"),"all finite qualifications required");
+        foreach(int exit in new[]{0,2,22,unchecked((int)0xc0000142u)}) Assert(!NativePlatform.AbiLegacyQualified(true,exit,all,empty,"positive_tasklist_and_findstr_observed"),"non1 cannot be relabeled passed "+exit);
+        Assert(!NativePlatform.AbiLegacyQualified(false,1,all,empty,"positive_tasklist_and_findstr_observed")
+          && !NativePlatform.AbiLegacyQualified(true,1,all,empty,"not_proven"),"unknown exit or missing positive process evidence remains failed");
+        Subject.LegacyCsvFacts hit=Subject.AnalyzeLegacyCsv(System.Text.Encoding.ASCII.GetBytes("\"OpenConsole.exe\",\"333\",\"Console\",\"2\",\"1 K\"\n"));
+        Assert(!NativePlatform.AbiLegacyQualified(true,1,all,hit,"positive_tasklist_and_findstr_observed"),"legacy helper matches never count as initial helper-free condition");
+        ObservedStart safe=NativePlatform.ProjectAbiLegacyObservation(new ObservedStart {imageName="TASKLIST.EXE",pid=50,parentPid=1,eventFileTime="134391494714882963"});
+        ObservedStart unknown=NativePlatform.ProjectAbiLegacyObservation(new ObservedStart {imageName="private-value-filename.exe",pid=51,parentPid=50});
+        Assert(safe.imageName=="tasklist.exe" && unknown.imageName=="other" && !CoreJson.Serialize(unknown).Contains("private-value"), "new probe publishes only exact fixed name enums, never arbitrary raw names");
+      });
+    }
+
     public static void Run(FixtureReport report)
     {
+      RunLegacyExitProbeTests(report);
       RunPostAckFailureTests(report);
       RunControllerQueryAclTests(report);
       RunAbiSameUserStartupTests(report);

@@ -48,6 +48,7 @@ namespace CcHahaInstallerProfile
     private FixtureState abiEnvironmentContext;
     private bool subjectPeerAuthenticated;
     private bool subjectProductsAllowed;
+    private bool abiLegacyObserverUncertain;
     private ControllerQueryDaclLease controllerQueryDacl;
     private FileSecurity originalControllerImageSecurity;
     private FileIdentity originalControllerImageIdentity;
@@ -1651,6 +1652,14 @@ namespace CcHahaInstallerProfile
         if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) return true;
       }
       return false;
+    }
+
+    internal FileIdentity LegacyCsvIdentity(FileStream input, string path)
+    {
+      CorePolicy.Require(input != null && !input.SafeFileHandle.IsInvalid && !input.SafeFileHandle.IsClosed, "Legacy CSV reader handle is missing");
+      SafeFileHandle held = input.SafeFileHandle; bool added = false;
+      try { held.DangerousAddRef(ref added); return ReadHandleIdentity(held.DangerousGetHandle(), false, HasReparseComponent(path)); }
+      finally { if (added) held.DangerousRelease(); }
     }
 
     public override FileIdentity IdentifyPath(string path, bool directory)
@@ -3313,6 +3322,118 @@ namespace CcHahaInstallerProfile
       RequireAbiSameUserToken(own, state.subject.identity);
     }
 
+    internal static void RequireAbiLegacyCommand(CommandPlan command, string windows, string root, string cmdHash)
+    {
+      string csv = Path.Combine(root, "observer-calibration-tasklist.csv"), matches = Path.Combine(root, "observer-calibration-matches.csv");
+      CorePolicy.Require(command != null && command.phase == "abi-legacy-readonly" && command.expectedExitCode == 1
+        && command.timeoutMilliseconds == 5000 && F1Policy.Hash(cmdHash) && command.expectedSha256 == cmdHash
+        && CorePolicy.SamePath(command.application, Path.Combine(windows, @"SysWOW64\cmd.exe"))
+        && command.commandLine == CcHahaInstallerProfile.Subject.LegacyPreflightCommand(windows, csv, matches), "ABI legacy probe accepts only the fixed read-only system command");
+    }
+
+    private void StartAbiLegacyChild(FixtureState state, CommandPlan command, Dictionary<string, string> environment, string root)
+    {
+      AbiOperatingSystem();
+      CorePolicy.Require(controllerContext == null && subjectContext == null && !subjectProductsAllowed && state.controllerRootOwned
+        && state.spec.mode == "abi-harness" && CorePolicy.SamePath(root, state.spec.controllerRoot) && state.account == null && !state.accountCreated && !state.profileCreated && !state.profileLoaded
+        && state.subject != null && state.subject.process == IntPtr.Zero && state.subject.job == IntPtr.Zero
+        && state.station != IntPtr.Zero && state.desktop != IntPtr.Zero && !String.IsNullOrEmpty(state.desktopName)
+        && state.desktopName.IndexOf('\\') > 0 && !state.desktopName.StartsWith("winsta0\\", StringComparison.OrdinalIgnoreCase), "ABI legacy probe requires the existing own private context");
+      string windows = ActualWindowsDirectory();
+      CorePolicy.Require(environment != null && environment.ContainsKey("SystemRoot") && CorePolicy.SamePath(environment["SystemRoot"], windows)
+        && !environment.ContainsKey("COMPLUS_Version"), "ABI legacy probe must use the normal isolated environment");
+      TokenIdentity own = InspectCurrentToken(); RequireAbiSameUserToken(own, state.targetIdentity);
+      FileIdentity image = IdentifyPath(Path.Combine(windows, @"SysWOW64\cmd.exe"), false);
+      CorePolicy.Require(!image.reparse && !image.directory, "ABI legacy command image must be regular");
+      RequireAbiLegacyCommand(command, windows, root, image.sha256);
+      state.subject.job = NewJob(); IntPtr block = EnvironmentBytes(environment);
+      try
+      {
+        StartupInfo startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = state.desktopName };
+        ProcessInformation created;
+        Win(CreateProcessW(command.application, new StringBuilder(command.commandLine), IntPtr.Zero, IntPtr.Zero, false,
+          0x08000404, block, root, ref startup, out created), "CreateProcessW own read-only ABI command");
+        state.subject.process = created.process; state.subject.thread = created.thread; state.subject.pid = checked((int)created.pid); state.subject.image = image;
+        state.subject.creationTime = ProcessCreation(state.subject.process);
+        Win(AssignProcessToJobObject(state.subject.job, state.subject.process), "Assign read-only ABI command Job");
+        state.subject.assigned = true; CaptureProcess(state.subject); RequireAbiSameUserToken(own, state.subject.identity);
+      }
+      finally { FreeEnvironmentBytes(block, environment); }
+    }
+
+    private static void RunAbiLegacyProbe(NativePlatform platform, FixtureState state, Dictionary<string, string> environment, string root, FileIdentity expectedRoot, FixtureReport report)
+    {
+      FileIdentity actualRoot = platform.IdentifyPath(root, true);
+      CorePolicy.Require(expectedRoot != null && !actualRoot.reparse && actualRoot.fileId == expectedRoot.fileId && actualRoot.volumePath == expectedRoot.volumePath,
+        "ABI legacy root identity changed");
+      platform.CloseChild(state.subject); state.subject = new OwnedProcess();
+      string csv = Path.Combine(root, "observer-calibration-tasklist.csv"), matches = Path.Combine(root, "observer-calibration-matches.csv");
+      CorePolicy.Require(!File.Exists(csv) && !File.Exists(matches), "ABI legacy output collision");
+      PositiveProcessObserver observer = null; bool namesKnown = true; bool exitKnown = false; int exit = 0; string observation = "not_proven";
+      try
+      {
+        string windows = ActualWindowsDirectory(), cmd = Path.Combine(windows, @"SysWOW64\cmd.exe");
+        CommandPlan command = new CommandPlan { phase = "abi-legacy-readonly", application = cmd,
+          commandLine = CcHahaInstallerProfile.Subject.LegacyPreflightCommand(windows, csv, matches), expectedSha256 = platform.IdentifyPath(cmd, false).sha256,
+          expectedExitCode = 1, timeoutMilliseconds = 5000 };
+        platform.abiLegacyObserverUncertain = true;
+        observer = new PositiveProcessObserver(state.runnerSid);
+        platform.StartAbiLegacyChild(state, command, environment, root);
+        platform.VerifyChild(state.subject, state.runnerSid, cmd, command.expectedSha256);
+        observer.Arm(command.phase, state.subject.pid, state.subject.creationTime);
+        platform.ResumeChild(state.subject);
+        exit = platform.WaitChild(state.subject, command.timeoutMilliseconds); exitKnown = true;
+        report.Check("owned-readonly-legacy-exit", exit == 1, CcHahaInstallerProfile.Subject.LegacyExitDetail(state.subject, exit, 1));
+        report.trace.Add("ABI legacy imagesha=" + state.subject.image.sha256);
+        report.trace.Add("ABI legacy argvsha=" + CorePolicy.HashText(command.commandLine) + "; envsha=" + CorePolicy.EnvironmentHash(environment) + "; flags=08000404");
+        observation = observer.Complete(command.phase);
+      }
+      catch (Exception error) { report.Check("owned-readonly-legacy-execution", false, SafeFailure(error)); }
+      finally
+      {
+        if (observer != null)
+        {
+          try
+          {
+            List<ObservedStart> rows = observer.Observed(); CorePolicy.Require(rows.Count <= 64, "ABI legacy observations exceeded own fixed-command bound");
+            int unknown = 0, legacy = 0;
+            foreach (ObservedStart row in rows)
+            {
+              ObservedStart safe = ProjectAbiLegacyObservation(row);
+              if (safe.imageName == "other") unknown++;
+              if (CorePolicy.LegacyNames.Contains(safe.imageName, StringComparer.OrdinalIgnoreCase)) legacy++;
+              report.observations.Add(safe);
+            }
+            namesKnown = unknown == 0 && legacy == 0;
+            report.Check("owned-readonly-legacy-observation-names", namesKnown,
+              "Fixed names only; unknown=" + unknown.ToString(CultureInfo.InvariantCulture) + "; legacy=" + legacy.ToString(CultureInfo.InvariantCulture));
+          }
+          catch (Exception error) { namesKnown = false; report.Check("owned-readonly-legacy-observations", false, SafeFailure(error)); }
+          try { observer.Dispose(); platform.abiLegacyObserverUncertain = false; }
+          catch (Exception error) { report.Check("owned-readonly-legacy-observer-close", false, SafeFailure(error)); }
+        }
+      }
+      if (!namesKnown) observation = "not_proven";
+      CcHahaInstallerProfile.Subject.LegacyCsvFacts all = CcHahaInstallerProfile.Subject.ReadLegacyCsv(platform, root, csv), hits = CcHahaInstallerProfile.Subject.ReadLegacyCsv(platform, root, matches);
+      report.trace.Add("ABI legacy " + all.Format("tasklist")); report.trace.Add("ABI legacy " + hits.Format("matches"));
+      report.Check("owned-readonly-legacy-calibration", AbiLegacyQualified(exitKnown, exit, all, hits, observation), "Same-caller/private-desktop/own-Job fixed seven-literal command only; observation=" + observation + "; no cross-user or product claim.");
+    }
+
+    internal static bool AbiLegacyQualified(bool exitKnown, int exit, CcHahaInstallerProfile.Subject.LegacyCsvFacts all, CcHahaInstallerProfile.Subject.LegacyCsvFacts hits, string observation)
+    {
+      return exitKnown && exit == 1 && all != null && all.status == "regular" && all.rows > 0 && all.systemPid
+        && all.literalMask == 0 && hits != null && hits.status == "regular" && hits.rows == 0 && hits.literalMask == 0
+        && observation == "positive_tasklist_and_findstr_observed";
+    }
+
+    internal static ObservedStart ProjectAbiLegacyObservation(ObservedStart row)
+    {
+      CorePolicy.Require(row != null, "ABI legacy observation missing");
+      string name = new string[] { "cmd.exe", "tasklist.exe", "findstr.exe", "conhost.exe" }.Concat(CorePolicy.LegacyNames)
+        .FirstOrDefault(value => String.Equals(value, row.imageName, StringComparison.OrdinalIgnoreCase)) ?? "other";
+      return new ObservedStart { phase = row.phase, pid = row.pid, parentPid = row.parentPid, sid = row.sid, eventFileTime = row.eventFileTime, imageName = name };
+    }
+
     internal static int AbiStartupProbeExitCode(FixtureReport failure)
     {
       // Finish may add a late persistence/write/close failure after an earlier
@@ -3386,7 +3507,7 @@ namespace CcHahaInstallerProfile
       }
       FileIdentity actual = platform.IdentifyPath(root, true);
       CorePolicy.Require(!actual.reparse && actual.fileId == expected.fileId && actual.volumePath == expected.volumePath, "ABI cleanup root changed");
-      string[] names = { "fixture.exe", "child-spec.json", "child.json", "owner.txt", "startup-spec.json", "startup-child.json" };
+      string[] names = { "fixture.exe", "child-spec.json", "child.json", "owner.txt", "startup-spec.json", "startup-child.json", "observer-calibration-tasklist.csv", "observer-calibration-matches.csv" };
       foreach (string path in Directory.GetFileSystemEntries(root))
       {
         CorePolicy.Require(names.Contains(Path.GetFileName(path), StringComparer.Ordinal) &&
@@ -3438,7 +3559,7 @@ namespace CcHahaInstallerProfile
         if (root == null || expected == null) return;
         FileIdentity actual = platform.IdentifyPath(root, true);
         CorePolicy.Require(!actual.reparse && actual.fileId == expected.fileId && actual.volumePath == expected.volumePath, "ABI inventory root changed");
-        string[] expectedNames = { "fixture.exe", "child-spec.json", "child.json", "owner.txt", "startup-spec.json", "startup-child.json" };
+        string[] expectedNames = { "fixture.exe", "child-spec.json", "child.json", "owner.txt", "startup-spec.json", "startup-child.json", "observer-calibration-tasklist.csv", "observer-calibration-matches.csv" };
         int count = 0;
         // Only inspect the immediate owned-root entries. Never traverse an
         // unknown directory or reparse point to obtain diagnostic evidence.
@@ -3680,6 +3801,8 @@ namespace CcHahaInstallerProfile
         report.Check("nonce-bound-private-ipc", exit == 0 && output != null && output.nonce == nonce &&
           output.pid == state.subject.pid && output.creationTime == state.subject.creationTime && output.sid == state.runnerSid,
           "Actual endpoint PID, held creation identity, same binary and two-way nonce acknowledgement matched");
+        RunAbiLegacyProbe(platform, state, environment, root, rootIdentity, report);
+        CorePolicy.Require(report.checks.All(check => check.status == "passed"), "ABI read-only legacy calibration failed");
         RunAbiStartupProbe(platform, state, spec, environment, report);
         CorePolicy.Require(report.checks.All(check => check.status == "passed"), "ABI assertion failed");
         report.Check("stage-a-no-real-profile-or-product", platform.controllerContext == null && platform.subjectContext == null &&
@@ -3718,6 +3841,7 @@ namespace CcHahaInstallerProfile
             RecordAbiRootInventory(report, "before-root-cleanup", root, rootIdentity, platform);
             RemoveAbiRoot(root, rootIdentity, platform);
           }
+          CorePolicy.Require(!platform.abiLegacyObserverUncertain, "ABI legacy observer closure is unknown");
           cleaned = true;
           report.cleanup = "passed";
           report.Check("owned-native-cleanup", true, "Owned processes/Job/thread/UI/IPC/environment/token handles closed and private ABI files removed");

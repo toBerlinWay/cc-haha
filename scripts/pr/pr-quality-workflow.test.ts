@@ -235,7 +235,7 @@ describe('PR quality workflow', () => {
     const gate = jobs['pr-quality-gate']!
     expect(macos['runs-on']).toBe('macos-latest')
     expect(linux['runs-on']).toBe('ubuntu-22.04')
-    expect(windows['runs-on']).toBe('windows-latest')
+    expect(windows['runs-on']).toBe('windows-2022')
     for (const job of [macos, linux, windows]) {
       expect(job.needs).toBe('scope-plan')
       expect(job.if).toBe("needs.scope-plan.outputs.desktop_native_checks == 'true'")
@@ -558,6 +558,15 @@ describe('full quality workflow', () => {
 })
 
 describe('Windows installer lane preparation and isolation', () => {
+  test('keeps the Windows 2022 pin confined to isolated installer jobs', () => {
+    const ordinary = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+    const full = workflowJobs(readFileSync('.github/workflows/nightly-quality.yml', 'utf8'))
+    expect(ordinary['windows-installer-checks']['runs-on']).toBe('windows-2022')
+    expect(full['p1879u-functional-upgrade']['runs-on']).toBe('windows-2022')
+    for (const name of ['windows-candidate-package', 'windows-profile-only-review']) expect(ordinary[name]['runs-on']).toBe('windows-latest')
+    for (const name of ['full-deterministic', 'selection-drift']) expect(full[name]['runs-on']).toBe('ubuntu-latest')
+  })
+
   test('builds a complete candidate only after successful ordinary reviewed-PR Windows checks, outside the gate', () => {
     const workflow = readFileSync('.github/workflows/pr-quality.yml', 'utf8')
     const jobs = workflowJobs(workflow)

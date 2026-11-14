@@ -699,7 +699,7 @@ const positiveSafe = (value: unknown): value is number => typeof value === 'numb
 const functionalFileTime = (value: unknown): value is string => typeof value === 'string' && /^[1-9][0-9]{0,19}$/.test(value) && BigInt(value) <= 18446744073709551615n
 
 export function functionalPackageTrackedDiffSha256(paths: string[]) {
-  const files = new Set(['scripts/pr/windows-installer-profile-fixture.cs', 'scripts/pr/windows-installer-profile-native.cs', 'scripts/pr/windows-installer-profile-fixture-tests.cs', 'scripts/pr/windows-installer-profile-review.ts', 'scripts/pr/windows-installer-profile-review.test.ts', '.github/workflows/nightly-quality.yml'])
+  const files = new Set(['scripts/pr/windows-installer-profile-fixture.cs', 'scripts/pr/windows-installer-profile-native.cs', 'scripts/pr/windows-installer-profile-fixture-tests.cs', 'scripts/pr/windows-installer-profile-review.ts', 'scripts/pr/windows-installer-profile-review.test.ts', '.github/workflows/nightly-quality.yml', '.github/workflows/pr-quality.yml', 'scripts/pr/pr-quality-workflow.test.ts'])
   requireReview(Array.isArray(paths) && paths.length <= 128 && new Set(paths).size === paths.length && paths.every(path => typeof path === 'string' && (files.has(path) || /^scripts\/pr\/windows-installer-functional-upgrade\/[A-Za-z0-9._-]+$/.test(path))), 'Prepared package reuse rejects changes outside the fixed regression-entry whitelist')
   return reviewHash(paths.toSorted().map(path => path + '\0').join(''))
 }

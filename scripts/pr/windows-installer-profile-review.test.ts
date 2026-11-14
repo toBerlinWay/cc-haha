@@ -118,10 +118,16 @@ describe('isolated functional upgrade admission and finite evidence', () => {
     }),
   )
 
+  test.each(['.github/workflows/pr-quality.yml', 'scripts/pr/pr-quality-workflow.test.ts'])(
+    'accepts the exact Windows environment regression path: %s', path => {
+      expect(functionalPackageTrackedDiffSha256([path])).toBe(reviewHash(path + '\0'))
+    },
+  )
+
   test('refuses product-only tracked changes even when the fourteen build inputs are equal', () => {
     const names = ['scripts/pr/windows-installer-profile-native.cs', '.github/workflows/nightly-quality.yml', 'scripts/pr/windows-installer-functional-upgrade/plan.json']
     expect(functionalPackageTrackedDiffSha256(names)).toBe(functionalPackageTrackedDiffSha256(names.toReversed()))
-    for (const path of ['src/main.ts', 'desktop/src/App.tsx', 'adapters/a.ts', 'scripts/pr/change-policy.ts', '.github/workflows/pr-quality.yml', 'scripts/pr/windows-installer-functional-upgrade/nested/evil.ts', 'scripts/pr/windows-installer-functional-upgrade/../escape.ts']) expect(() => functionalPackageTrackedDiffSha256([...names, path])).toThrow('fixed regression-entry whitelist')
+    for (const path of ['src/main.ts', 'desktop/src/App.tsx', 'adapters/a.ts', 'scripts/pr/change-policy.ts', '.github/workflows/unknown.yml', 'scripts/pr/pr-quality-workflow.other.test.ts', '.github/workflows/../pr-quality.yml', 'scripts/pr/../pr-quality-workflow.test.ts', 'scripts/pr/windows-installer-functional-upgrade/nested/evil.ts', 'scripts/pr/windows-installer-functional-upgrade/../escape.ts']) expect(() => functionalPackageTrackedDiffSha256([...names, path])).toThrow('fixed regression-entry whitelist')
   })
 
   test.each(['valid-with-advisory-unknown', 'compile', 'self-test', 'abi-cleanup', 'bootstrap-cleanup'])(
@@ -203,6 +209,7 @@ describe('isolated functional upgrade admission and finite evidence', () => {
     expect(workflow.on.workflow_dispatch.inputs.functional_upgrade.default).toBe(false)
     for (const name of ['full-deterministic', 'selection-drift']) expect(workflow.jobs[name].if).toBe("${{ !(github.event_name == 'workflow_dispatch' && inputs.functional_upgrade) }}")
     const functional = workflow.jobs['p1879u-functional-upgrade']
+    expect(functional['runs-on']).toBe('windows-2022')
     expect(functional.if).toContain('github.run_attempt == 1')
     expect(functional.permissions).toEqual({ contents: 'read', 'pull-requests': 'read', actions: 'read' })
     expect(workflow.concurrency['cancel-in-progress']).toBe(false)

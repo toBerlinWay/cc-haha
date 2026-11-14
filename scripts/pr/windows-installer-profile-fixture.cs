@@ -1898,6 +1898,48 @@ namespace CcHahaInstallerProfile
       }
     }
 
+    internal static bool KnownSubjectFailureStage(string stage)
+    {
+      return new string[] { "subject-bindings", "subject-connect-server", "subject-token", "subject-known-folders", "subject-private-desktop",
+        "subject-hive", "subject-write-hello", "subject-read-ack", "subject-ack", "subject-products", "subject-environment",
+        "subject-prepare-directories", "subject-legacy-command", "subject-legacy-launch", "subject-legacy-verify", "subject-legacy-phase-ack",
+        "subject-legacy-resume", "subject-legacy-wait", "subject-legacy-output", "subject-legacy-cleanup" }.Contains(stage, StringComparer.Ordinal);
+    }
+
+    internal static void PreservePostAckFailure(FixtureState state, ProtocolMessage message, int peerPid)
+    {
+      CorePolicy.Require(state != null && state.acknowledged && state.spec != null && state.spec.mode == FunctionalPolicy.ControllerMode
+        && state.subject != null && state.subject.pid > 0 && peerPid == state.subject.pid && message != null
+        && message.version == 1 && message.kind == "failed" && message.nonce == state.spec.nonce, "postack-failed-peer-and-nonce-binding");
+      FixtureReport child = message.report;
+      CorePolicy.Require(child != null && child.mode == FunctionalPolicy.SubjectMode && child.status == "failed"
+        && child.binarySha256 == state.spec.expectedBinarySha256 && child.specSha256 == state.spec.subjectSpecSha256
+        && (child.cleanup == "passed" || child.cleanup == "failed") && child.realAccountsCreated == 0 && child.realProfilesCreated == 0,
+        "postack-failed-report-binding");
+      FunctionalPolicy.NoF1Promotion(child);
+      CorePolicy.Require(child.checks != null && child.checks.Count >= 1 && child.checks.Count <= 16, "postack-failed-check-bounds");
+      CheckResult first = child.checks[0];
+      string[] terminalFirst = { "subject-owned-child-stop", "subject-owned-child-close", "subject-terminal-report", "subject-terminal-message", "subject-channel-close" };
+      // Finish can be the first failing operation after otherwise successful
+      // work. Its fixed cleanup/persistence check is then the primary, while
+      // failedStage legitimately remains absent in the existing wire format.
+      bool stageBound = KnownSubjectFailureStage(child.failedStage) && first != null && first.name == child.failedStage;
+      bool terminalBound = child.failedStage == null && first != null && terminalFirst.Contains(first.name, StringComparer.Ordinal);
+      CorePolicy.Require((stageBound || terminalBound) && first.status == "failed" && first.detail != null && first.detail.Length <= 192,
+        "postack-failed-first-error-binding");
+      // Latch the primary safe failure before considering late diagnostics. A
+      // malformed later record cannot erase it, authorize ACK or promote facts.
+      state.report.Check("subject-postack-" + first.name, false, NativePlatform.SafeFailure(new FixtureFailure(first.detail)));
+      string[] late = { "subject-failure-type", "subject-failure-native", "subject-failure-stack", "subject-secondary-failure", "subject-failure-diagnostic-unavailable",
+        "subject-phase-cleanup", "subject-owned-child-stop", "subject-owned-child-close", "subject-terminal-report", "subject-terminal-message", "subject-channel-close", "f1-debug-cleanup-unknown" };
+      foreach (CheckResult check in child.checks.Skip(1))
+      {
+        CorePolicy.Require(check != null && check.status == "failed" && late.Contains(check.name, StringComparer.Ordinal)
+          && check.detail != null && check.detail.Length <= 192, "postack-failed-late-check-bounds");
+        state.report.Check("subject-postack-" + check.name, false, NativePlatform.SafeFailure(new FixtureFailure(check.detail)));
+      }
+    }
+
     internal static void SendPhaseAck(FixtureReport report, FixtureChannel channel, string nonce, string phase, bool native)
     {
       if (native && (phase == "fresh-install" || phase == "old22-negative" || phase == "old-normal-removal-positive"
@@ -2039,6 +2081,7 @@ namespace CcHahaInstallerProfile
         }
         else if (message.kind == "failed")
         {
+          if (functional) PreservePostAckFailure(state, message, state.channel.PeerProcessId);
           if (message.report != null)
           {
             state.report.releasedPeExecuted |= message.report.releasedPeExecuted;
@@ -2513,6 +2556,7 @@ namespace CcHahaInstallerProfile
     private readonly Dictionary<string, string> normal;
     private readonly Dictionary<string, string> unavailable;
     private readonly List<OwnedProcess> owned = new List<OwnedProcess>();
+    private string diagnosticStage;
 
     private Subject(FixtureSpec input, NativePlatform native, FixtureChannel connection, FixtureReport result)
     {
@@ -2561,12 +2605,15 @@ namespace CcHahaInstallerProfile
           && acknowledgement.specSha256 == report.specSha256 && acknowledgement.binarySha256 == report.binarySha256, "subject-authenticated-ack");
         api.AllowSubjectProducts(spec, acknowledgement);
         stage = "subject-products";
+        stage = "subject-environment";
         subject = new Subject(spec, api, channel, report);
+        stage = "subject-products";
         if (spec.mode == FunctionalPolicy.SubjectMode) subject.FunctionalProfile(); else subject.HistoricalProfile();
       }
       catch (Exception error)
       {
-        report.status = "failed"; report.failedStage = stage; report.Check(stage, false, NativePlatform.SafeFailure(error));
+        if (spec.mode == FunctionalPolicy.SubjectMode) RememberFailure(report, subject == null ? stage : subject.diagnosticStage ?? stage, error);
+        else { report.status = "failed"; report.failedStage = stage; report.Check(stage, false, NativePlatform.SafeFailure(error)); }
       }
       finally
       {
@@ -2574,6 +2621,42 @@ namespace CcHahaInstallerProfile
           subject == null ? null : (Action)delegate { CoreJson.Write(spec.output, report); });
       }
       return report;
+    }
+
+    internal static void RememberFailure(FixtureReport report, string stage, Exception error)
+    {
+      string safe;
+      try { safe = NativePlatform.SafeFailure(error); } catch { safe = "Native operation failed (UnknownException)"; }
+      if (safe.Length > 192) safe = "Native operation failed (UnknownException)";
+      report.status = "failed";
+      if (report.failedStage != null)
+      {
+        if (report.checks.Count == 0 || report.checks[0].detail != safe) report.Check("subject-secondary-failure", false, safe);
+        return;
+      }
+      report.failedStage = stage;
+      report.Check(stage, false, safe);
+      try
+      {
+        string type = error == null ? "UnknownException" : error.GetType().Name;
+        if (type.Length > 64 || !System.Text.RegularExpressions.Regex.IsMatch(type, @"\A[A-Za-z][A-Za-z0-9]*\z")) type = "UnknownException";
+        string typed = NativePlatform.SafeCanaryFailure(error).Replace("f1-canary-failure-", "subject-failure-");
+        report.Check("subject-failure-type", false, "type=" + type);
+        report.Check("subject-failure-native", false, typed.Length <= 192 ? typed : "Subject failure native metadata unavailable");
+        List<string> methods = new List<string>();
+        System.Diagnostics.StackFrame[] frames = error == null ? null : new System.Diagnostics.StackTrace(error, false).GetFrames();
+        if (frames != null) foreach (System.Diagnostics.StackFrame frame in frames.Take(24))
+        {
+          System.Reflection.MethodBase method = frame.GetMethod();
+          if (method == null || (method.DeclaringType != typeof(Subject) && method.DeclaringType != typeof(NativePlatform) && method.DeclaringType != typeof(CorePolicy))) continue;
+          string name = method.DeclaringType.Name + "." + method.Name;
+          if (name.Length <= 80 && System.Text.RegularExpressions.Regex.IsMatch(name, @"\A[A-Za-z][A-Za-z0-9]*\.[A-Za-z][A-Za-z0-9]*\z")
+            && !methods.Contains(name) && ("stack=" + String.Join(",", methods.Concat(new string[] { name }))).Length <= 160) methods.Add(name);
+          if (methods.Count == 4) break;
+        }
+        report.Check("subject-failure-stack", false, "stack=" + (methods.Count == 0 ? "not_observed" : String.Join(",", methods)));
+      }
+      catch { report.Check("subject-failure-diagnostic-unavailable", false, "Subject failure diagnostic unavailable"); }
     }
 
     internal static void Finish(ProfilePlatform api, IEnumerable<OwnedProcess> owned, FixtureChannel channel,
@@ -2634,6 +2717,7 @@ namespace CcHahaInstallerProfile
         startedAtUtc = DateTime.UtcNow.ToString("o")
       };
       Exception firstFailure = null;
+      bool initial = spec.mode == FunctionalPolicy.SubjectMode && command.phase == "observer-calibration";
       try
       {
         if (spec.mode == F1Policy.SubjectMode && F1Policy.Audited(command.phase))
@@ -2645,11 +2729,15 @@ namespace CcHahaInstallerProfile
             return ReadAck("debug-ack", command.phase).debugReply;
           };
         }
+        if (initial) diagnosticStage = "subject-legacy-launch";
         api.StartChild(child, command, environment, spec.fixtureRoot, spec.desktopName);
+        if (initial) diagnosticStage = "subject-legacy-verify";
         api.VerifyChild(child, spec.expectedSid, command.application, command.expectedSha256);
+        if (initial) diagnosticStage = "subject-legacy-phase-ack";
         channel.WriteLine(CoreJson.Serialize(new ProtocolMessage { kind = "phase-start", nonce = spec.nonce,
           phase = command.phase, pid = child.pid, creationTime = child.creationTime, image = child.image, sid = spec.expectedSid }));
         ReadAck("phase-ack", command.phase);
+        if (initial) diagnosticStage = "subject-legacy-resume";
         api.ResumeChild(child);
         if (command.phase == "fresh-install" || command.phase == "old22-negative" || command.phase == "old-normal-removal-positive"
           || command.phase == "rebuild-old-install" || command.phase == "guarded-new-upgrade" || command.phase == FunctionalPolicy.UpgradePhase)
@@ -2657,6 +2745,7 @@ namespace CcHahaInstallerProfile
           report.releasedPeExecuted = true; report.releasedPeMayHaveExecuted = true;
           report.releasedPeExecutionStatus = "resume_returned_success";
         }
+        if (initial) diagnosticStage = "subject-legacy-wait";
         evidence.exitCode = api.WaitChild(child, command.timeoutMilliseconds);
         CorePolicy.Require(evidence.exitCode == command.expectedExitCode, "phase-exact-exit-" + command.phase);
         if (beforeEnd != null) beforeEnd(evidence);
@@ -2667,10 +2756,16 @@ namespace CcHahaInstallerProfile
         ReadAck("phase-end-ack", command.phase);
         return evidence;
       }
-      catch (Exception error) { firstFailure = error; throw; }
+      catch (Exception error) { firstFailure = error; if (spec.mode == FunctionalPolicy.SubjectMode) RememberFailure(report, diagnosticStage ?? "subject-products", error); throw; }
       finally
       {
-        if (child.debugPump == null || firstFailure == null) { api.StopChild(child); api.CloseChild(child); owned.Remove(child); }
+        if (initial) diagnosticStage = "subject-legacy-cleanup";
+        if (firstFailure != null && spec.mode == FunctionalPolicy.SubjectMode)
+        {
+          try { api.StopChild(child); api.CloseChild(child); owned.Remove(child); }
+          catch (Exception cleanup) { report.Check("subject-phase-cleanup", false, NativePlatform.SafeFailure(cleanup)); }
+        }
+        else if (child.debugPump == null || firstFailure == null) { api.StopChild(child); api.CloseChild(child); owned.Remove(child); }
         else { try { api.StopChild(child); api.CloseChild(child); owned.Remove(child); } catch (Exception cleanup) { report.Check("f1-debug-cleanup-unknown", false, NativePlatform.SafeFailure(cleanup)); } }
       }
     }
@@ -2718,6 +2813,7 @@ namespace CcHahaInstallerProfile
         + "\" && \"" + findstr + "\" /I /L" + predicates + " \"" + csv + "\" > \"" + matches + "\"\"";
       int expected = allowedHelper == null ? 1 : 0;
       Phase(Command(phase, cmd, command, expected, 30000), normal, delegate {
+        if (spec.mode == FunctionalPolicy.SubjectMode && phase == "observer-calibration") diagnosticStage = "subject-legacy-output";
         CorePolicy.Require(File.Exists(csv) && File.Exists(matches), "tasklist-and-findstr-both-ran");
         CorePolicy.Require(new FileInfo(csv).Length <= 2097152 && new FileInfo(matches).Length <= 2097152, "bounded-legacy-csv");
         List<string[]> all = ParseCsv(Encoding.ASCII.GetString(File.ReadAllBytes(csv)));
@@ -2952,7 +3048,9 @@ namespace CcHahaInstallerProfile
     {
       FunctionalPolicy.NoF1Promotion(report);
       FunctionalUpgradeFacts facts = report.functionalFacts = new FunctionalUpgradeFacts();
-      PrepareDirectories(); LegacyPreflight("observer-calibration", null); CalibratePowerShell();
+      diagnosticStage = "subject-prepare-directories"; PrepareDirectories();
+      diagnosticStage = "subject-legacy-command"; LegacyPreflight("observer-calibration", null);
+      diagnosticStage = null; CalibratePowerShell();
       FileIdentity setup = api.IdentifyPath(spec.setupPath, false);
       CorePolicy.Require(!setup.reparse && setup.bytes == CorePolicy.SetupBytes && setup.sha256 == CorePolicy.SetupHash, "functional-old-setup-before-launch");
       facts.freshInstallExit = Phase(Command("fresh-install", spec.setupPath, CorePolicy.SetupCommand(spec.setupPath, spec.installRoot), 0, 300000), normal,

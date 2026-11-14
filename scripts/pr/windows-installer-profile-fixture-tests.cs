@@ -999,8 +999,120 @@ namespace CcHahaInstallerProfile
       });
     }
 
+    private static ProtocolMessage PostAckFrame(FixtureState state, string fault)
+    {
+      FixtureReport child = new FixtureReport { mode = FunctionalPolicy.SubjectMode, binarySha256 = state.spec.expectedBinarySha256, specSha256 = state.spec.subjectSpecSha256 };
+      Subject.RememberFailure(child, "subject-prepare-directories", new FixtureFailure("fresh-subject-fixture-root"));
+      ProtocolTestChannel wire = new ProtocolTestChannel();
+      Subject.Finish(new FakePlatform { Fault = fault == "late-cleanup" ? "subject-child-stop" : null },
+        fault == "late-cleanup" ? new List<OwnedProcess> { new OwnedProcess() } : new List<OwnedProcess>(), wire, child, state.spec.nonce, null);
+      ProtocolMessage message = CoreJson.Deserialize<ProtocolMessage>(wire.Messages.Single());
+      if (fault == "nonce") message.nonce = "wrong";
+      if (fault == "binary") message.report.binarySha256 = new String('0', 64);
+      if (fault == "spec") message.report.specSha256 = new String('0', 64);
+      if (fault == "mode") message.report.mode = "other";
+      if (fault == "stage") message.report.failedStage = "private-unknown-stage";
+      if (fault == "checks") while (message.report.checks.Count <= 16) message.report.checks.Add(new CheckResult { name = "subject-phase-cleanup", status = "failed", detail = "controlled-cleanup" });
+      if (fault == "first") message.report.checks[0].name = "other";
+      if (fault == "promotion") message.report.full_old_to_new = "passed";
+      if (fault == "late-malformed") message.report.checks.Add(new CheckResult { name = "unknown-sensitive-check", status = "passed", detail = "private-payload" });
+      if (fault == "unsafe-detail") message.report.checks[0].detail = "C:\\private\\credential.json\nvalue-secret";
+      return message;
+    }
+    internal static void RunPostAckFailureTests(FixtureReport report)
+    {
+      Case(report, "postack-actual-controller-loop-retains-first-failed-frame-without-promotion", delegate {
+        FakePlatform api = new FakePlatform { Fault = "functional-postack-frame" }; FixtureState state = Execute(api, FunctionalSpec());
+        Assert(state.report.status == "failed" && state.report.failedStage == "bounded-historical-subject" && state.report.cleanup == "cleaned", "finite failure remains failed despite own cleanup success");
+        Assert(state.report.checks[0].name == "subject-postack-subject-prepare-directories" && state.report.checks[0].detail == "fresh-subject-fixture-root", "actual ReceivePhases must preserve primary before generic catch");
+        Assert(state.report.checks.Any(check => check.name == "subject-postack-subject-failure-native") && api.Channel.Acknowledged && api.Channel.PhaseAcks == 0,
+          "typed source failure retained; initial ACK is not followed by phase ACK or business success");
+        Assert(state.report.phases.Count == 0 && !state.report.releasedPeExecuted && !state.report.releasedPeMayHaveExecuted, "no passed phase or released process fact invented");
+        FunctionalPolicy.NoF1Promotion(state.report);
+      });
+      Case(report, "postack-malformed-bindings-and-reports-stay-failed", delegate {
+        foreach (string fault in new string[] { "nonce", "peer", "binary", "spec", "mode", "stage", "checks", "first", "promotion", "unsafe-detail" })
+        {
+          FakePlatform api = new FakePlatform { Fault = "functional-postack-" + fault }; FixtureState state = Execute(api, FunctionalSpec());
+          Assert(state.report.status == "failed" && api.Channel.PhaseAcks == 0 && state.report.phases.Count == 0, "malformed " + fault + " grants nothing");
+          Assert(!state.report.checks.Any(check => check.detail.Contains("credential.json") || check.detail.Contains("value-secret")), "unsafe raw detail cannot cross publication " + fault);
+          FunctionalPolicy.NoF1Promotion(state.report);
+        }
+      });
+      Case(report, "postack-malformed-late-diagnostic-cannot-erase-trusted-primary", delegate {
+        FakePlatform api = new FakePlatform { Fault = "functional-postack-late-malformed" }; FixtureState state = Execute(api, FunctionalSpec());
+        Assert(state.report.checks[0].detail == "fresh-subject-fixture-root" && state.report.status == "failed"
+          && !state.report.checks.Any(check => check.detail.Contains("private-payload")), "primary latched before late malformed reject; arbitrary later content never copied");
+      });
+      Case(report, "postack-actual-first-directory-guard-frame-keeps-owned-stack-and-bindings", delegate {
+        string root = Path.Combine(Path.GetTempPath(), "cc-haha-postack-pure-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+        try
+        {
+          FixtureSpec spec = FunctionalSpec(); spec.mode = FunctionalPolicy.SubjectMode; spec.fixtureRoot = root;
+          FixtureReport child = new FixtureReport { mode = spec.mode, binarySha256 = spec.expectedBinarySha256, specSha256 = new String('b', 64) };
+          Subject subject = (Subject)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(Subject));
+          System.Reflection.BindingFlags fields = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+          typeof(Subject).GetField("spec", fields).SetValue(subject, spec); typeof(Subject).GetField("report", fields).SetValue(subject, child);
+          Exception primary = null;
+          try { typeof(Subject).GetMethod("FunctionalProfile", fields).Invoke(subject, new object[0]); }
+          catch (System.Reflection.TargetInvocationException error) { primary = error.InnerException; }
+          Assert(primary is FixtureFailure && primary.Message == "fresh-subject-fixture-root", "actual first operation rejects existing owned root before any native or product call");
+          string stage = (string)typeof(Subject).GetField("diagnosticStage", fields).GetValue(subject);
+          Subject.RememberFailure(child, stage, primary);
+          Assert(child.failedStage == "subject-prepare-directories" && child.checks.Any(check => check.name == "subject-failure-stack" && check.detail.Contains("Subject.PrepareDirectories")), "real producer stack records only owned methods with no source paths");
+          ProtocolTestChannel channel = new ProtocolTestChannel(); Subject.Finish(new FakePlatform(), new List<OwnedProcess>(), channel, child, "nonce", null);
+          FixtureState state = new FixtureState { spec = new FixtureSpec { mode = FunctionalPolicy.ControllerMode, nonce = "nonce", expectedBinarySha256 = spec.expectedBinarySha256, subjectSpecSha256 = child.specSha256 },
+            acknowledged = true, subject = new OwnedProcess { pid = 50 }, report = new FixtureReport() };
+          Controller.PreservePostAckFailure(state, CoreJson.Deserialize<ProtocolMessage>(channel.Messages.Single()), 50);
+          Assert(state.report.checks[0].detail == "fresh-subject-fixture-root" && state.report.checks.All(check => check.status == "failed"), "actual Finish wire consumed without success or changed primary");
+        }
+        finally { Directory.Delete(root, false); }
+      });
+      Case(report, "postack-first-native-code-survives-secondary-errors-and-bounded-metadata", delegate {
+        FixtureReport child = new FixtureReport();
+        Subject.RememberFailure(child, "subject-legacy-launch", new System.ComponentModel.Win32Exception(5));
+        Subject.RememberFailure(child, "subject-legacy-cleanup", new FixtureFailure("controlled-late-cleanup"));
+        Assert(child.failedStage == "subject-legacy-launch" && child.checks[0].detail.Contains("Win32 5") && child.checks.Any(check => check.detail.Contains("code-00000005")), "original typed native code retained without exception message values");
+        Assert(child.checks.All(check => check.detail.Length <= 192 && check.detail.IndexOfAny(new char[] { '\r', '\n', '\\', '/' }) < 0), "bounded stage/type/code/hash/owned-method metadata only");
+      });
+      Case(report, "postack-actual-phase-primary-survives-a-second-cleanup-failure", delegate {
+        Subject subject = (Subject)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(Subject));
+        System.Reflection.BindingFlags fields = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        FixtureReport child = new FixtureReport { mode = FunctionalPolicy.SubjectMode };
+        List<OwnedProcess> owned = new List<OwnedProcess>();
+        typeof(Subject).GetField("spec", fields).SetValue(subject, new FixtureSpec { mode = FunctionalPolicy.SubjectMode });
+        typeof(Subject).GetField("report", fields).SetValue(subject, child);
+        typeof(Subject).GetField("owned", fields).SetValue(subject, owned);
+        // An unavailable adapter fails the real launch and the real finally
+        // cleanup separately; neither invocation can reach a Windows API.
+        Exception primary = null;
+        try { typeof(Subject).GetMethod("Phase", fields).Invoke(subject, new object[] {
+          new CommandPlan { phase = "observer-calibration", commandLine = "controlled-owned-command", expectedSha256 = new String('a', 64) },
+          new Dictionary<string,string> { { "SystemRoot", @"C:\Windows" } }, null }); }
+        catch (System.Reflection.TargetInvocationException error) { primary = error.InnerException; }
+        Assert(primary is NullReferenceException && child.failedStage == "subject-legacy-launch"
+          && child.checks[0].name == "subject-legacy-launch" && child.checks.Any(check => check.name == "subject-phase-cleanup"),
+          "actual Phase locks launch first error before a separate finally failure");
+        Assert(owned.Count == 1 && child.status == "failed", "unknown child cleanup remains owned for terminal cleanup; no success or silent removal");
+      });
+      Case(report, "postack-actual-finish-late-cleanup-frame-retains-primary-first", delegate {
+        FixtureState state = new FixtureState { acknowledged = true, spec = new FixtureSpec { mode = FunctionalPolicy.ControllerMode, nonce = "nonce", expectedBinarySha256 = new String('a',64), subjectSpecSha256 = new String('b',64) }, subject = new OwnedProcess { pid = 50 }, report = new FixtureReport() };
+        ProtocolMessage message = PostAckFrame(state, "late-cleanup"); Controller.PreservePostAckFailure(state, message, 50);
+        Assert(message.report.cleanup == "failed" && state.report.checks[0].detail == "fresh-subject-fixture-root"
+          && state.report.checks.Any(check => check.name == "subject-postack-subject-owned-child-stop"), "late cleanup never replaces primary or becomes successful cleanup evidence");
+        FixtureReport terminalOnly = new FixtureReport { mode = FunctionalPolicy.SubjectMode, status = "passed", binarySha256 = state.spec.expectedBinarySha256, specSha256 = state.spec.subjectSpecSha256 };
+        ProtocolTestChannel wire = new ProtocolTestChannel();
+        Subject.Finish(new FakePlatform { Fault = "subject-child-stop" }, new List<OwnedProcess> { new OwnedProcess() }, wire, terminalOnly, state.spec.nonce, null);
+        state.report = new FixtureReport();
+        Controller.PreservePostAckFailure(state, CoreJson.Deserialize<ProtocolMessage>(wire.Messages.Single()), 50);
+        Assert(terminalOnly.failedStage == null && state.report.checks[0].name == "subject-postack-subject-owned-child-stop"
+          && state.report.checks.All(check => check.status == "failed"), "existing cleanup-only failed frame without failedStage retains its fixed first error");
+      });
+    }
+
     public static void Run(FixtureReport report)
     {
+      RunPostAckFailureTests(report);
       RunControllerQueryAclTests(report);
       RunAbiSameUserStartupTests(report);
       RunSubjectStartupTests(report);
@@ -1760,10 +1872,11 @@ namespace CcHahaInstallerProfile
       private readonly FixtureState state;
       private int reads;
       public bool Acknowledged;
+      public int PhaseAcks;
       public bool Disposed;
       internal bool FunctionalUpgradeDelivered;
       public FakeChannel(FakePlatform api, FixtureState state) { this.api = api; this.state = state; }
-      public override int PeerProcessId { get { return state.subject.pid + (api.Fault == "hello-peer" ? 1 : 0); } }
+      public override int PeerProcessId { get { return state.subject.pid + (api.Fault == "hello-peer" || (Acknowledged && api.Fault == "functional-postack-peer") ? 1 : 0); } }
       public override string ReadLine(int timeoutMilliseconds)
       {
         api.Gate(state, "ReadLine");
@@ -1786,6 +1899,8 @@ namespace CcHahaInstallerProfile
         Assert(Acknowledged, "subject cannot send product completion before ACK");
         if (state.spec.mode == FunctionalPolicy.ControllerMode)
         {
+          if (api.Fault != null && api.Fault.StartsWith("functional-postack-", StringComparison.Ordinal))
+            return CoreJson.Serialize(PostAckFrame(state, api.Fault.Substring("functional-postack-".Length)));
           int step=reads-2;
           if(step<FunctionalPolicy.Phases.Length*2)
           {
@@ -1819,6 +1934,7 @@ namespace CcHahaInstallerProfile
       {
         ProtocolMessage message = CoreJson.Deserialize<ProtocolMessage>(line);
         if (message.kind == "ack") Acknowledged = true;
+        if (message.kind == "phase-ack") PhaseAcks++;
       }
       public override void Dispose() { Disposed = true; }
     }

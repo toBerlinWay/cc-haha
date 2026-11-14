@@ -86,7 +86,8 @@ describe('isolated functional upgrade admission and finite evidence', () => {
     const packet = prepareFunctionalUpgradePacket(workspace, invocation, once, claim)
     expect(packet.spec.f1).toBeNull()
     expect(packet.spec.functional.candidateSourceHead).toBe(invocation.head)
-    expect(packet.spec.functional.newPackage.sourceHead).toBe('7bc62ecd68b96e900094b924193f06438be6ba2a')
+    expect(packet.spec.functional.newPackage.sourceHead).toBe('8be14e806bd91cefef94c49362b810ccc01d8543')
+    expect(functionalUpgrade.oldFixtureSourceHead).toBe('7bc62ecd68b96e900094b924193f06438be6ba2a')
     expect(packet.spec.functional.stageASourceHead).toBe('a'.repeat(40))
     expect(packet.spec.functional.authorizationReceipt.sha256).toBe(reviewHash(packet.files.find(file => file.name === 'functional-authorization.json')!.bytes))
     expect(packet.authorization.claimSha256).toBe(reviewHash(`${JSON.stringify(claim, null, 2)}\n`))
@@ -159,7 +160,7 @@ describe('isolated functional upgrade admission and finite evidence', () => {
     }),
   )
 
-  test.each(['valid', 'prior-failed', 'missing-page', 'duplicate', 'changed-total', 'wrong-pr', 'wrong-main', 'advanced-main', 'a-not-complete', 'a-job-failed', 'a-job-duplicate', 'a-job-page-missing', 'a-artifact', 'old-artifact', 'package-artifact'])(
+  test.each(['valid', 'prior-failed', 'missing-page', 'duplicate', 'changed-total', 'wrong-pr', 'wrong-main', 'advanced-main', 'a-not-complete', 'a-job-failed', 'a-job-duplicate', 'a-job-page-missing', 'a-artifact', 'old-artifact', 'old-artifact-source', 'package-artifact'])(
     'claims complete first invocation and actual immutable inputs: %s', async fault => {
       const workspace = realpathSync(mkdtempSync(join(tmpdir(), 'functional-claim-')))
       try {
@@ -186,7 +187,7 @@ describe('isolated functional upgrade admission and finite evidence', () => {
             const page = Number(new URL('https://fixture' + path).searchParams.get('page'))
             return { total_count: aJobs.length, jobs: fault === 'a-job-page-missing' && page === 2 ? [] : aJobs.slice((page - 1) * 100, page * 100) }
           }
-          for (const [pin, runId, head, name] of [[once.stageA.artifact, once.stageA.runId, once.stageA.sourceHead, 'a-artifact'], [functionalUpgrade.oldFixtureArtifact, functionalUpgrade.oldFixtureRun, manifest.packageSourceHead, 'old-artifact'], [manifest.packageArtifact, manifest.packageRunId, manifest.packageSourceHead, 'package-artifact']] as const) if (path === `/actions/artifacts/${pin.id}`) return { id: pin.id, name: pin.name, size_in_bytes: pin.size, digest: fault === name ? 'sha256:' + '0'.repeat(64) : pin.digest, expired: false, workflow_run: { id: runId, head_sha: head } }
+          for (const [pin, runId, head, name] of [[once.stageA.artifact, once.stageA.runId, once.stageA.sourceHead, 'a-artifact'], [functionalUpgrade.oldFixtureArtifact, functionalUpgrade.oldFixtureRun, functionalUpgrade.oldFixtureSourceHead, 'old-artifact'], [manifest.packageArtifact, manifest.packageRunId, manifest.packageSourceHead, 'package-artifact']] as const) if (path === `/actions/artifacts/${pin.id}`) return { id: pin.id, name: pin.name, size_in_bytes: pin.size, digest: fault === name ? 'sha256:' + '0'.repeat(64) : pin.digest, expired: false, workflow_run: { id: runId, head_sha: fault === 'old-artifact-source' && name === 'old-artifact' ? manifest.packageSourceHead : head } }
           throw new Error('Unexpected fixture read')
         }
         const result = claimFunctionalUpgrade(invocation, once, claim.rootPacketSha256, claim.claimantSourceSha256, get)
@@ -212,6 +213,12 @@ describe('isolated functional upgrade admission and finite evidence', () => {
     expect(runs).toContain('--functional-upgrade-claim')
     expect(runs).toContain('-ExecuteFunctionalUpgrade')
     expect(functional.env.FUNCTIONAL_PACKET_BASE64).toBe('${{ inputs.functional_packet_base64 }}')
+    const oldDownload = functional.steps.find((step: any) => step.name === 'Download only the fixed historical full Setup')
+    const newDownload = functional.steps.find((step: any) => step.name === 'Download the statically proven prepared package from its actual source run')
+    expect(oldDownload.with['artifact-ids']).toBe('14109065646')
+    expect(oldDownload.with['run-id']).toBe('43581658402')
+    expect(newDownload.with['artifact-ids']).toBe('14125767614')
+    expect(newDownload.with['run-id']).toBe('43624029448')
   })
 
   test.each(['valid', 'standalone-only', 'missing-helper-exit', 'replay', 'unknown-cleanup', 'F1-promotion', 'wrong-image', 'overflow-time', 'duplicate-process'])(

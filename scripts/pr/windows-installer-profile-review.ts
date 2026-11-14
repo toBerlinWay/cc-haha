@@ -667,6 +667,7 @@ export const functionalUpgrade = {
   owner: profileReview.owner,
   planSha256: '37d4f8d484a7797e9eaa6d89c05d4f53716cf6ec350936126f5bb6e665f6ef53',
   environmentSha256: '4b2e46bfde62ddb189734e42c4fb258ddab687878b7f9ff8393ddf70d8770252',
+  oldFixtureSourceHead: '7bc62ecd68b96e900094b924193f06438be6ba2a',
   oldFixtureRun: 43581658402,
   oldFixtureArtifact: { id: 14109065646, name: 'windows-installer-v078-fixture', size: 230729090, digest: 'sha256:f4865a57fb8b0437dc2ba9a1dc23bdda089f99b7fb699643fc14448800daaf85' },
 } as const
@@ -812,7 +813,7 @@ export async function claimFunctionalUpgrade(invocation: ReviewInvocation, packe
   // global coverage may still run; merge gates remain the publisher's gate.
   requireReview(windows.length === 1 && windows[0].id === packet.stageA.jobId && windows[0].status === 'completed' && windows[0].conclusion === 'success', 'Actual Stage A Windows qualification job not passed')
   await verifyArtifact(packet.stageA.artifact, packet.stageA.runId, packet.stageA.sourceHead)
-  await verifyArtifact(functionalUpgrade.oldFixtureArtifact, functionalUpgrade.oldFixtureRun, packet.newPackageSourceHead)
+  await verifyArtifact(functionalUpgrade.oldFixtureArtifact, functionalUpgrade.oldFixtureRun, functionalUpgrade.oldFixtureSourceHead)
   // Package metadata is fixed in source, not selected by the dispatch caller.
   const packagePin = functionalPreparedPackage
   await verifyArtifact(packagePin.artifact, packagePin.runId, packagePin.sourceHead)
@@ -820,8 +821,8 @@ export async function claimFunctionalUpgrade(invocation: ReviewInvocation, packe
 }
 
 const functionalPreparedPackage = {
-  sourceHead: '7bc62ecd68b96e900094b924193f06438be6ba2a', runId: 43581658402,
-  artifact: { id: 14109460170, name: 'windows-installer-candidate-package-7bc62ecd68b96e900094b924193f06438be6ba2a-43581658402', size: 219177029, digest: 'sha256:c00ee9dc89a3bf1f38babcbf4aaf38fc74f347b351d439c9379bb6b31837539b' },
+  sourceHead: '8be14e806bd91cefef94c49362b810ccc01d8543', runId: 43624029448,
+  artifact: { id: 14125767614, name: 'windows-installer-candidate-package-8be14e806bd91cefef94c49362b810ccc01d8543-43624029448', size: 219176125, digest: 'sha256:3911399768e4e0dc08dc8ab1dcd6630e4919990c8a1a5cd2850cdbc4cf67e4b8' },
 }
 
 export function functionalUpgradePaths(head: string) {

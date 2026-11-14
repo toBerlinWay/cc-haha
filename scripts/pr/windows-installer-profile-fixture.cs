@@ -715,9 +715,9 @@ namespace CcHahaInstallerProfile
     internal const string RunId = "a2c7e590-96df-40b1-8943-8e4bcf07a6d2";
     internal const string PlanHash = "37d4f8d484a7797e9eaa6d89c05d4f53716cf6ec350936126f5bb6e665f6ef53";
     internal const string EnvironmentHash = "4b2e46bfde62ddb189734e42c4fb258ddab687878b7f9ff8393ddf70d8770252";
-    internal const string ProductHead = "7bc62ecd68b96e900094b924193f06438be6ba2a";
-    internal const string NewSetupHash = "058d55c3d28905eb013ae66879a836245a004022bc4e83edc9198561fed72030";
-    internal const long NewSetupBytes = 218418822;
+    internal const string ProductHead = "8be14e806bd91cefef94c49362b810ccc01d8543";
+    internal const string NewSetupHash = "9fdfb4461e2cc78ccd82411699e4fbcfea8735a502a7d89da4ea7581312d1992";
+    internal const long NewSetupBytes = 218417877;
     internal static readonly string[] Phases = { "observer-calibration", "powershell-normal-capability-1", "powershell-normal-capability-2",
       "powershell-unavailable-capability", "fresh-install", "positive-preflight", "old-normal-removal-positive", "rebuild-old-install",
       "negative-preflight", "old22-negative", "upgrade-negative-preflight", UpgradePhase };
@@ -789,13 +789,13 @@ namespace CcHahaInstallerProfile
       foreach (F1BlobPin pin in blobs) F1Policy.Blob(pin);
       CorePolicy.Require(package.sourceHead == ProductHead && package.displayVersion == "0.7.8"
         && package.setup.bytes == NewSetupBytes && package.setup.sha256 == NewSetupHash
-        && package.uninstallerBytes == 214502 && package.uninstallerSha256 == "8350a694b0d7f9eb243f6c51a64f145207988e4485febbec5e84a72fa59df418"
-        && package.guardedRemovalBytes == 52224 && package.guardedRemovalSha256 == "fb74dacc504222016497c199489133d3bf48fbfa44b046195e19f81e1cc132fc"
+        && package.uninstallerBytes == 214523 && package.uninstallerSha256 == "6a65db1c7eea139f9c8bf7099fe640db71b5aba4feceb9a95001f9da4734b22f"
+        && package.guardedRemovalBytes == 52224 && package.guardedRemovalSha256 == "6d8bc083129dcf42e07e2517d48d34d8def023f3c1231f2ff9777e69bfe2daf9"
         && f.guardedConfigBytes == 308 && f.guardedConfigSha256 == "1d788b468c1c6454511f16f2c909bbaf6bee157ad711b7ca7c96f8c8c8f53be3"
         && package.archiveLiteral == "$R0\\Uninstall Claude Code Haha.exe", "functional-exact-prepared-product-members");
-      CorePolicy.Require(f.packageReceipt.bytes == 40353 && f.packageReceipt.sha256 == "4aa89e11fa991c8e98aa13bea70e1cb2983445cf2902881caf92873067e579ef"
+      CorePolicy.Require(f.packageReceipt.bytes == 40353 && f.packageReceipt.sha256 == "460ca437d086f1612baa5b2b0c11ebed026ba7295e1338ccf803604e3e1f4f54"
         && package.buildReceipt.bytes == f.packageReceipt.bytes && package.buildReceipt.sha256 == f.packageReceipt.sha256
-        && package.memberReceipt.bytes == 6800 && package.memberReceipt.sha256 == "f40c46b1a20e895a4972d53d75ce086b3b8b4844f5fb39a85e8fd41721aad870"
+        && package.memberReceipt.bytes == 6800 && package.memberReceipt.sha256 == "4a31fcc9f418be9a87c8383fea1b4cc44754946073d52212fca3301bf4ad759f"
         && blobs.Where(pin => !Object.ReferenceEquals(pin, package.setup)).All(pin => pin.bytes <= 65536), "functional-fixed-bounded-raw-receipts");
       CorePolicy.Require(package.payloads != null && package.payloads.Count >= 3 && package.payloads.Count <= 20000
         && package.payloads.All(pin => pin != null && pin.bytes > 0 && F1Policy.Hash(pin.sha256)

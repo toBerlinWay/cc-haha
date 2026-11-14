@@ -212,8 +212,8 @@ jobs:
       - name: Download the statically proven prepared package from its actual source run
         uses: actions/download-artifact@v4
         with:
-          artifact-ids: '14109460170'
-          run-id: '43581658402'
+          artifact-ids: '14125767614'
+          run-id: '43624029448'
           repository: NanmiCoder/cc-haha
           github-token: ${{ github.token }}
           merge-multiple: true

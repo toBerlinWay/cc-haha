@@ -1,18 +1,18 @@
 {
   "version": 1,
-  "packageSourceHead": "7bc62ecd68b96e900094b924193f06438be6ba2a",
-  "packageTree": "ad9557bd188ca322f16ae4b6f4863de649128329",
-  "packageRunId": 43581658402,
+  "packageSourceHead": "8be14e806bd91cefef94c49362b810ccc01d8543",
+  "packageTree": "f27a39462b51b0f3696a99ce49478a726997fe2f",
+  "packageRunId": 43624029448,
   "packageArtifact": {
-    "id": 14109460170,
-    "name": "windows-installer-candidate-package-7bc62ecd68b96e900094b924193f06438be6ba2a-43581658402",
-    "size": 219177029,
-    "digest": "sha256:c00ee9dc89a3bf1f38babcbf4aaf38fc74f347b351d439c9379bb6b31837539b"
+    "id": 14125767614,
+    "name": "windows-installer-candidate-package-8be14e806bd91cefef94c49362b810ccc01d8543-43624029448",
+    "size": 219176125,
+    "digest": "sha256:3911399768e4e0dc08dc8ab1dcd6630e4919990c8a1a5cd2850cdbc4cf67e4b8"
   },
   "packageReceipt": {
     "file": "candidate-package-receipt.json",
     "bytes": 40353,
-    "sha256": "4aa89e11fa991c8e98aa13bea70e1cb2983445cf2902881caf92873067e579ef"
+    "sha256": "460ca437d086f1612baa5b2b0c11ebed026ba7295e1338ccf803604e3e1f4f54"
   },
   "productSourcePins14": [
     {
@@ -102,16 +102,16 @@
   ],
   "setup": {
     "file": "Claude-Code-Haha-0.7.8-Windows-x64-Setup.exe",
-    "bytes": 218418822,
-    "sha256": "058d55c3d28905eb013ae66879a836245a004022bc4e83edc9198561fed72030"
+    "bytes": 218417877,
+    "sha256": "9fdfb4461e2cc78ccd82411699e4fbcfea8735a502a7d89da4ea7581312d1992"
   },
   "uninstaller": {
-    "bytes": 214502,
-    "sha256": "8350a694b0d7f9eb243f6c51a64f145207988e4485febbec5e84a72fa59df418"
+    "bytes": 214523,
+    "sha256": "6a65db1c7eea139f9c8bf7099fe640db71b5aba4feceb9a95001f9da4734b22f"
   },
   "guardedRemoval": {
     "bytes": 52224,
-    "sha256": "fb74dacc504222016497c199489133d3bf48fbfa44b046195e19f81e1cc132fc"
+    "sha256": "6d8bc083129dcf42e07e2517d48d34d8def023f3c1231f2ff9777e69bfe2daf9"
   },
   "config": {
     "bytes": 308,
@@ -122,34 +122,34 @@
       "kind": "app-exe",
       "relativePath": "Claude Code Haha.exe",
       "bytes": 232749568,
-      "sha256": "8567fc808fdba235d50317d3c4b00ae61c233cc3b74492bf01b310982e0f5beb"
+      "sha256": "ce44b452739512595d7e8a28ce4227410d00e1f3f44681ab0eed59a1d26d0074"
     },
     {
       "kind": "app-asar",
       "relativePath": "resources\\app.asar",
-      "bytes": 192271431,
-      "sha256": "ee771a420aa55ca58091676fbcd7c23f9f1514dca31379ce3ac953b8a9a06445"
+      "bytes": 192269468,
+      "sha256": "aea414f7e00dcde14037b17258edfe8b9dce08661741ce42e1da73f759353949"
     },
     {
       "kind": "sidecar",
       "relativePath": "resources\\app.asar.unpacked\\src-tauri\\binaries\\claude-sidecar-x86_64-pc-windows-msvc.exe",
       "bytes": 132575744,
-      "sha256": "411c32fe1b3a8f6ef578703bd381d5f3957701f3bc07b4237d36499f13d81d44"
+      "sha256": "cadc30ac7a0132280ee7301a0c003d4f84bc4f14d2968d084874218d71b817c0"
     }
   ],
   "memberProof": {
     "file": "setup-member/member-proof.json",
     "bytes": 6800,
-    "sha256": "f40c46b1a20e895a4972d53d75ce086b3b8b4844f5fb39a85e8fd41721aad870"
+    "sha256": "4a31fcc9f418be9a87c8383fea1b4cc44754946073d52212fca3301bf4ad759f"
   },
   "helperProof": {
     "file": "uninstaller-member/member-proof.json",
     "bytes": 6716,
-    "sha256": "b2356ed982f21e37054eeffb8e2b122a514b313664846df26c5a77dc29965cf0"
+    "sha256": "5f55c8638537b0b0a12fc4de9c3c67aed5125ab0e61f2616507f5198df0f47c2"
   },
   "configProof": {
     "file": "uninstaller-config-member/member-proof.json",
     "bytes": 6357,
-    "sha256": "ad8b9a0972941822f8012e43ba8ac103db20dc16ecd224470516a09b8030aad6"
+    "sha256": "fd7689d4e2b6c953a079f09628bf987d2aabc93f7545f4a01bce0302ebbd24d0"
   }
 }
